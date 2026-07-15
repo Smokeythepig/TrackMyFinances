@@ -54,6 +54,10 @@ NOT_HIDDEN = "t.account_id NOT IN (SELECT account_id FROM hidden_accounts)"
 # cash-flow income or spending.
 NOT_INVESTMENT = "t.account_id NOT IN (SELECT id FROM accounts WHERE type = 'investment')"
 
+# User-excluded transactions (reimbursed purchases, etc.) stay visible in the
+# list but never count in budgets, insights, or income.
+NOT_EXCLUDED = "t.id NOT IN (SELECT transaction_id FROM excluded_transactions)"
+
 
 # Internal transfers (between your own accounts / to your own cards) must not
 # count as income or spending in analytics. Provider type flags are unreliable,
@@ -82,10 +86,12 @@ TXN_SELECT = f"""
            t.category AS original_category,
            (o.transaction_id IS NOT NULL) AS overridden,
            {IS_TRANSFER()} AS is_transfer,
+           (x.transaction_id IS NOT NULL) AS is_excluded,
            a.name AS account_name, a.institution_name
     FROM transactions t
     JOIN accounts a ON t.account_id = a.id
     LEFT JOIN category_overrides o ON o.transaction_id = t.id
+    LEFT JOIN excluded_transactions x ON x.transaction_id = t.id
 """
 
 
@@ -373,6 +379,19 @@ def set_category(txn_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/transactions/<txn_id>/excluded", methods=["PUT"])
+def set_excluded(txn_id):
+    excluded = bool((request.json or {}).get("excluded"))
+    db = get_db()
+    if excluded:
+        db.execute("INSERT OR IGNORE INTO excluded_transactions (transaction_id) VALUES (?)", (txn_id,))
+    else:
+        db.execute("DELETE FROM excluded_transactions WHERE transaction_id=?", (txn_id,))
+    db.commit()
+    db.close()
+    return jsonify({"ok": True})
+
+
 # ── Auto-categorization rules ────────────────────────────────────────────────
 
 def _rule_matches(db, pattern):
@@ -546,7 +565,7 @@ def gather_alerts(db, sync_errors):
     # Paycheck context
     paychecks = [dict(r) for r in db.execute(f"""
         SELECT t.date, t.amount FROM transactions t
-        WHERE t.amount > 0 AND {PAYROLL_SQL} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        WHERE t.amount > 0 AND {PAYROLL_SQL} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         ORDER BY t.date DESC LIMIT 30
     """).fetchall()]
     base = float(get_meta(db, "comp_base", 0) or 0)
@@ -566,7 +585,7 @@ def gather_alerts(db, sync_errors):
     if s["paycheck"]:
         for p in db.execute(f"""
             SELECT t.id, t.date, t.amount FROM transactions t
-            WHERE t.amount > 0 AND {PAYROLL_SQL} AND t.date >= ? AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+            WHERE t.amount > 0 AND {PAYROLL_SQL} AND t.date >= ? AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         """, (recent_cutoff,)).fetchall():
             body = f"{_fmt_usd(p['amount'])} deposited"
             if per_check_net and p["amount"] > per_check_net * 1.08:
@@ -591,7 +610,7 @@ def gather_alerts(db, sync_errors):
         threshold = float(s["large_txn_threshold"])
         for t in db.execute(f"""
             SELECT t.id, t.description, t.amount FROM transactions t
-            WHERE t.amount <= ? AND t.date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+            WHERE t.amount <= ? AND t.date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         """, (-threshold, recent_cutoff)).fetchall():
             alerts.append((f"txn-{t['id']}", "Large charge",
                            f"{_fmt_usd(abs(t['amount']))} at {t['description'][:60]}"))
@@ -910,7 +929,7 @@ def insights_summary():
             SELECT
               COALESCE(SUM(CASE WHEN amount > 0 THEN amount END), 0) AS income,
               COALESCE(SUM(CASE WHEN amount < 0 THEN -amount END), 0) AS spending
-            FROM transactions t WHERE substr(date, 1, 7) = ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+            FROM transactions t WHERE substr(date, 1, 7) = ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         """, (month,)).fetchone()
         income, spending = row["income"], row["spending"]
         rate = round((income - spending) / income * 100, 1) if income > 0 else None
@@ -932,7 +951,7 @@ def insights_monthly():
                COALESCE(SUM(CASE WHEN amount > 0 THEN amount END), 0) AS income,
                COALESCE(SUM(CASE WHEN amount < 0 THEN -amount END), 0) AS expenses
         FROM transactions t
-        WHERE date != '' AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        WHERE date != '' AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         GROUP BY month ORDER BY month DESC LIMIT ?
     """, (months,)).fetchall()
     db.close()
@@ -950,7 +969,7 @@ def insights_categories():
                COUNT(*) AS count
         FROM transactions t
         LEFT JOIN category_overrides o ON o.transaction_id = t.id
-        WHERE t.amount < 0 AND substr(t.date, 1, 7) = ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        WHERE t.amount < 0 AND substr(t.date, 1, 7) = ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         GROUP BY 1 ORDER BY spent DESC
     """, (month,)).fetchall()
     db.close()
@@ -966,7 +985,7 @@ def insights_merchants():
     rows = db.execute(f"""
         SELECT description, ROUND(SUM(-amount), 2) AS spent, COUNT(*) AS count
         FROM transactions t
-        WHERE amount < 0 AND date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        WHERE amount < 0 AND date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         GROUP BY description ORDER BY spent DESC LIMIT 15
     """, (cutoff,)).fetchall()
     db.close()
@@ -1032,13 +1051,13 @@ def income_summary():
     year_start = date.today().strftime("%Y-01-01")
     paychecks = [dict(r) for r in db.execute(f"""
         SELECT t.date, t.description, t.amount FROM transactions t
-        WHERE t.amount > 0 AND {PAYROLL_SQL} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        WHERE t.amount > 0 AND {PAYROLL_SQL} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
         ORDER BY t.date DESC LIMIT 60
     """).fetchall()]
     ytd_paychecks = sum(p["amount"] for p in paychecks if p["date"] >= year_start)
     ytd_total = db.execute(f"""
         SELECT COALESCE(SUM(amount), 0) s FROM transactions t
-        WHERE amount > 0 AND date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        WHERE amount > 0 AND date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
     """, (year_start,)).fetchone()["s"]
 
     base = float(get_meta(db, "comp_base", 0) or 0)
@@ -1167,7 +1186,7 @@ def compute_recurring(db):
     dismissed = {r["merchant_key"] for r in db.execute("SELECT merchant_key FROM recurring_dismissed").fetchall()}
     manual = [dict(r) for r in db.execute("SELECT * FROM manual_subscriptions ORDER BY name").fetchall()]
     rows = db.execute(
-        f"SELECT description, amount, date FROM transactions t WHERE amount < 0 AND date != '' AND {NOT_HIDDEN} AND {NOT_INVESTMENT} ORDER BY date"
+        f"SELECT description, amount, date FROM transactions t WHERE amount < 0 AND date != '' AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED} ORDER BY date"
     ).fetchall()
 
     groups = defaultdict(list)
@@ -1314,7 +1333,7 @@ def compute_budgets(db, month):
                COALESCE((
                    SELECT SUM(-t.amount) FROM transactions t
                    LEFT JOIN category_overrides o ON o.transaction_id = t.id
-                   WHERE t.amount < 0 AND substr(t.date, 1, 7) = ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+                   WHERE t.amount < 0 AND substr(t.date, 1, 7) = ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT} AND {NOT_EXCLUDED}
                      AND COALESCE(NULLIF(COALESCE(o.category, t.category), ''), 'uncategorized') = b.category
                ), 0) AS spent
         FROM budgets b ORDER BY b.category

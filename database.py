@@ -115,6 +115,10 @@ def init_db():
             account_id TEXT PRIMARY KEY
         );
 
+        CREATE TABLE IF NOT EXISTS excluded_transactions (
+            transaction_id TEXT PRIMARY KEY
+        );
+
         CREATE TABLE IF NOT EXISTS goals (
             account_id TEXT PRIMARY KEY,
             target REAL NOT NULL

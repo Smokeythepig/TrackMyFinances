@@ -415,6 +415,15 @@ tbody td { padding: .65rem .8rem; }
 .toggle { display: flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); white-space: nowrap; }
 .toggle input { accent-color: var(--accent); }
 .row-transfer td { opacity: .55; }
+.row-excluded td { opacity: .45; }
+.row-excluded .amount-pos, .row-excluded .amount-neg { text-decoration: line-through; }
+.excluded-tag { background: #3a2a1f; color: #fbb86c; }
+.btn-exclude {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  font-size: .8rem; padding: .1rem .4rem; border-radius: 6px; opacity: 0;
+}
+tbody tr:hover .btn-exclude, .row-excluded .btn-exclude { opacity: 1; }
+.btn-exclude:hover { border-color: var(--border); color: var(--text); background: var(--surface2); }
 .transfer-tag {
   font-size: .65rem; padding: .1rem .4rem; border-radius: 99px;
   background: var(--surface2); color: var(--muted); text-transform: uppercase; letter-spacing: .04em;

@@ -404,15 +404,16 @@ function renderTransactions() {
   const body = $("txn-body");
   const rows = txnRows;
 
-  const total = rows.reduce((s, t) => s + parseFloat(t.amount), 0);
-  const spent = rows.filter(t => t.amount < 0).reduce((s, t) => s - parseFloat(t.amount), 0);
-  const received = rows.filter(t => t.amount > 0).reduce((s, t) => s + parseFloat(t.amount), 0);
+  const counted = rows.filter(t => !t.is_excluded);
+  const total = counted.reduce((s, t) => s + parseFloat(t.amount), 0);
+  const spent = counted.filter(t => t.amount < 0).reduce((s, t) => s - parseFloat(t.amount), 0);
+  const received = counted.filter(t => t.amount > 0).reduce((s, t) => s + parseFloat(t.amount), 0);
   $("txn-summary").innerHTML = rows.length
     ? `${rows.length} transactions · <span class="green">in ${fmt(received)}</span> · <span class="red">out ${fmt(spent)}</span> · net <b>${fmt(total)}</b>`
     : "";
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="6" class="empty">No transactions.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" class="empty">No transactions.</td></tr>`;
     return;
   }
 
@@ -420,13 +421,14 @@ function renderTransactions() {
     const amt = parseFloat(t.amount);
     const amtClass = amt > 0 ? "amount-pos" : "amount-neg";
     const catLabel = t.category || "—";
-    return `<tr class="${t.is_transfer ? "row-transfer" : ""}">
+    return `<tr class="${t.is_transfer ? "row-transfer" : ""} ${t.is_excluded ? "row-excluded" : ""}">
       <td>${fmtDate(t.date)}</td>
-      <td>${esc(t.description) || "—"}${t.is_transfer ? ` <span class="transfer-tag">transfer</span>` : ""}</td>
+      <td>${esc(t.description) || "—"}${t.is_transfer ? ` <span class="transfer-tag">transfer</span>` : ""}${t.is_excluded ? ` <span class="transfer-tag excluded-tag">excluded</span>` : ""}</td>
       <td>${esc(t.account_name) || "—"}</td>
       <td><span class="cat-chip ${t.overridden ? "overridden" : ""}" data-txn="${esc(t.id)}" data-cat="${esc(t.category || "")}" title="Click to recategorize">${esc(catLabel)}</span></td>
       <td class="${amtClass}">${fmt(Math.abs(amt))}</td>
       <td><span class="status-pill ${esc(t.status)}">${esc(t.status) || "—"}</span></td>
+      <td><button class="btn-exclude" title="${t.is_excluded ? "Count this transaction again" : "Exclude from budgets & insights (e.g. reimbursed purchases)"}" onclick="toggleExcluded('${esc(t.id)}', ${t.is_excluded ? "false" : "true"})">${t.is_excluded ? "↩" : "✕"}</button></td>
     </tr>`;
   }).join("");
 
@@ -523,6 +525,17 @@ function editCategory(chip) {
     if (e.key === "Escape") { input.value = current; input.blur(); }
   });
   input.addEventListener("blur", save, { once: true });
+}
+
+async function toggleExcluded(txnId, excluded) {
+  await api(`/api/transactions/${txnId}/excluded`, { method: "PUT", body: JSON.stringify({ excluded }) });
+  toast(excluded ? "Excluded — no longer counts in budgets or insights" : "Transaction counts again", "ok");
+  await loadTransactions();
+  const [summary, monthly, merchants] = await Promise.all([
+    api("/api/insights/summary"), api("/api/insights/monthly?months=12"), api("/api/insights/merchants"),
+  ]);
+  state = { ...state, summary, monthly, merchants };
+  renderDashboard();
 }
 
 $("btn-export").addEventListener("click", () => {
