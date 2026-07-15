@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrackMyFinances</title>
+<script src="js/vendor/chart.umd.min.js"></script>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<div id="app">
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div id="logo">
+      <span class="logo-icon">$</span>
+      <span>TrackMyFinances</span>
+    </div>
+    <ul id="nav-links">
+      <li class="nav-item active" data-page="dashboard"><span class="icon">◈</span> Dashboard</li>
+      <li class="nav-item" data-page="accounts"><span class="icon">⊟</span> Accounts</li>
+      <li class="nav-item" data-page="transactions"><span class="icon">↕</span> Transactions</li>
+      <li class="nav-item" data-page="income"><span class="icon">$</span> Income</li>
+      <li class="nav-item" data-page="budgets"><span class="icon">◔</span> Budgets</li>
+      <li class="nav-item" data-page="recurring"><span class="icon">⟳</span> Recurring</li>
+      <li class="nav-item" data-page="networth"><span class="icon">↗</span> Net Worth</li>
+    </ul>
+    <div id="sidebar-footer">
+      <div id="last-refresh"></div>
+      <button id="btn-refresh" class="btn-primary">↺ Refresh Data</button>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <main id="content">
+
+    <!-- DASHBOARD -->
+    <section id="page-dashboard" class="page active">
+      <h1>Dashboard</h1>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Net Worth</div>
+          <div class="stat-value" id="stat-networth">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Income This Month</div>
+          <div class="stat-value green" id="stat-income">—</div>
+          <div class="stat-sub" id="stat-income-delta"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Spent This Month</div>
+          <div class="stat-value red" id="stat-spent">—</div>
+          <div class="stat-sub" id="stat-spent-delta"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Savings Rate</div>
+          <div class="stat-value" id="stat-savings">—</div>
+          <div class="stat-sub" id="stat-savings-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Subscriptions / mo</div>
+          <div class="stat-value" id="stat-subs">—</div>
+          <div class="stat-sub" id="stat-subs-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Next Paycheck</div>
+          <div class="stat-value" id="stat-payday">—</div>
+          <div class="stat-sub" id="stat-payday-sub"></div>
+        </div>
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card">
+          <h3>Allocation</h3>
+          <div class="chart-wrap"><canvas id="chart-allocation"></canvas></div>
+        </div>
+        <div class="chart-card wide">
+          <h3>Spending — Last 30 Days by Category</h3>
+          <div class="chart-wrap"><canvas id="chart-spending"></canvas></div>
+        </div>
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card full">
+          <h3>Monthly Cash Flow (12 months)</h3>
+          <div class="chart-wrap tall"><canvas id="chart-cashflow"></canvas></div>
+        </div>
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card wide">
+          <h3>Top Merchants — Last 90 Days</h3>
+          <div id="top-merchants" class="mini-list"></div>
+        </div>
+        <div class="chart-card wide">
+          <h3>Recent Activity</h3>
+          <div id="recent-activity" class="mini-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section id="page-accounts" class="page">
+      <h1>Accounts</h1>
+      <div id="sync-banner" class="sync-banner" style="display:none">
+        <div>
+          <div style="font-weight:600">✓ Connected via SimpleFIN</div>
+          <div id="sync-banner-sub" style="font-size:.75rem;color:var(--muted)"></div>
+        </div>
+        <button class="btn-danger" id="btn-simplefin-disconnect">Disconnect</button>
+      </div>
+      <div id="accounts-list" class="card-list">
+        <p class="empty">No accounts yet. Connect SimpleFIN below.</p>
+      </div>
+
+      <div id="simplefin-disconnected" style="margin-top:2rem">
+        <h2>SimpleFIN</h2>
+        <div class="card">
+          <p class="page-sub" style="margin:0 0 .9rem">
+            SimpleFIN Bridge ($15/yr) syncs your banks — Discover, SoFi,
+            Fidelity, USAA and thousands more. Link your banks at
+            <b>bridge.simplefin.org</b>, create a setup token under <i>My Account</i>, and paste it here.
+          </p>
+          <form id="form-simplefin" class="entry-form horizontal">
+            <input name="token" placeholder="Paste SimpleFIN setup token" required style="flex:3" />
+            <button type="submit" class="btn-primary">Connect</button>
+          </form>
+        </div>
+      </div>
+
+      <details style="margin-top:2rem">
+        <summary class="details-summary">Import from CSV (for banks SimpleFIN doesn't cover)</summary>
+        <div class="card" style="margin-top:.8rem">
+        <p class="page-sub" style="margin:0 0 .9rem">
+          For banks SimpleFIN doesn't cover: export transactions as CSV from the bank's
+          website, then import them here. Re-importing overlapping exports is safe —
+          duplicates are skipped.
+        </p>
+        <form id="form-import" class="entry-form">
+          <div class="import-grid">
+            <input name="account_name" placeholder="Account name (e.g. Discover It Card)" required />
+            <select name="account_type">
+              <option value="credit">Credit card</option>
+              <option value="depository">Checking / Savings</option>
+            </select>
+            <input name="balance" type="number" step="0.01" placeholder="Current balance (optional)" />
+            <select name="sign" title="How purchase amounts appear in the CSV">
+              <option value="auto">Amount sign: auto-detect</option>
+              <option value="asis">Amounts already signed (debits negative)</option>
+              <option value="invert">Purchases are positive (Discover style)</option>
+            </select>
+          </div>
+          <input name="file" type="file" accept=".csv,text/csv" required />
+          <button type="submit" class="btn-primary">Import CSV</button>
+        </form>
+        </div>
+      </details>
+    </section>
+
+    <!-- TRANSACTIONS -->
+    <section id="page-transactions" class="page">
+      <h1>Transactions</h1>
+      <div class="toolbar">
+        <input id="txn-search" type="text" placeholder="Search…" />
+        <select id="txn-account-filter"><option value="">All accounts</option></select>
+        <select id="txn-category-filter"><option value="">All categories</option></select>
+        <input id="txn-start" type="date" title="From date" />
+        <input id="txn-end" type="date" title="To date" />
+        <label class="toggle"><input id="txn-hide-transfers" type="checkbox" /> Hide transfers</label>
+        <button id="btn-export" class="btn-secondary" title="Export filtered transactions to CSV">⇩ CSV</button>
+      </div>
+      <div id="txn-summary" class="txn-summary"></div>
+      <div class="table-wrap">
+        <table id="txn-table">
+          <thead>
+            <tr>
+              <th>Date</th><th>Description</th><th>Account</th>
+              <th>Category</th><th>Amount</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="txn-body">
+            <tr><td colspan="6" class="empty">No transactions yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint">Tip: click a category to recategorize that transaction.</p>
+    </section>
+
+    <!-- INCOME -->
+    <section id="page-income" class="page">
+      <h1>Income</h1>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">YTD Income (deposited)</div>
+          <div class="stat-value green" id="inc-ytd">—</div>
+          <div class="stat-sub" id="inc-ytd-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Est. Take-Home @ OTE</div>
+          <div class="stat-value" id="inc-net-ote">—</div>
+          <div class="stat-sub" id="inc-net-ote-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Commission Progress</div>
+          <div class="stat-value" id="inc-commission">—</div>
+          <div class="stat-sub" id="inc-commission-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pace vs Plan</div>
+          <div class="stat-value" id="inc-pace">—</div>
+          <div class="stat-sub" id="inc-pace-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg Paycheck</div>
+          <div class="stat-value" id="inc-avg">—</div>
+          <div class="stat-sub" id="inc-avg-sub"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:1rem">
+        <h3>Compensation (pre-tax)</h3>
+        <p class="page-sub" style="margin:0 0 .8rem">
+          Enter your gross salary and commission target. Take-home is estimated for a
+          Texas single filer (federal tax + FICA only — no state income tax).
+        </p>
+        <form id="form-comp" class="entry-form horizontal">
+          <input name="base" type="number" step="500" min="0" placeholder="Base salary (e.g. 50000)" required />
+          <input name="commission" type="number" step="500" min="0" placeholder="Commission at OTE (e.g. 35000)" />
+          <button type="submit" class="btn-primary">Save</button>
+        </form>
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card full">
+          <h3>Monthly Income — last 12 months</h3>
+          <div class="chart-wrap tall"><canvas id="chart-income"></canvas></div>
+        </div>
+      </div>
+
+      <h2 style="margin-top:1.5rem">Recent Paychecks</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Commission</th></tr></thead>
+          <tbody id="paycheck-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- BUDGETS -->
+    <section id="page-budgets" class="page">
+      <h1>Budgets</h1>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Budgeted</div>
+          <div class="stat-value" id="budget-total">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Spent This Month</div>
+          <div class="stat-value red" id="budget-spent">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Remaining</div>
+          <div class="stat-value green" id="budget-remaining">—</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:1rem">
+        <h3>Add / Update Budget</h3>
+        <form id="form-budget" class="entry-form horizontal">
+          <input name="category" id="budget-category-input" list="category-list" placeholder="Category (e.g. dining)" required />
+          <datalist id="category-list"></datalist>
+          <input name="monthly_limit" type="number" step="0.01" min="0.01" placeholder="Monthly limit" required />
+          <button type="submit" class="btn-primary">Save Budget</button>
+        </form>
+      </div>
+
+      <div id="budgets-list" class="card-list"></div>
+    </section>
+
+    <!-- RECURRING -->
+    <section id="page-recurring" class="page">
+      <h1>Recurring Charges</h1>
+      <p class="page-sub">Automatically detected subscriptions and repeating bills.</p>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Active Subscriptions</div>
+          <div class="stat-value" id="rec-count">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Est. Monthly Cost</div>
+          <div class="stat-value red" id="rec-monthly">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Est. Yearly Cost</div>
+          <div class="stat-value red" id="rec-yearly">—</div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:1rem">
+        <h3>Add a Subscription</h3>
+        <p class="page-sub" style="margin:0 0 .8rem">
+          For anything detection misses — annual renewals, brand-new signups, or bills paid
+          from an unlinked account.
+        </p>
+        <form id="form-subscription" class="entry-form horizontal">
+          <input name="name" placeholder="Name (e.g. iCloud+)" required style="flex:2" />
+          <input name="amount" type="number" step="0.01" min="0.01" placeholder="Amount" required />
+          <select name="cadence">
+            <option value="monthly" selected>Monthly</option>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Every 2 weeks</option>
+            <option value="quarterly">Quarterly</option>
+            <option value="yearly">Yearly</option>
+          </select>
+          <input name="next_date" type="date" title="Next charge date (optional)" />
+          <button type="submit" class="btn-primary">Add</button>
+        </form>
+      </div>
+
+      <div id="recurring-list" class="card-list"></div>
+      <p id="dismissed-note" class="hint" style="display:none"></p>
+    </section>
+
+    <!-- NET WORTH -->
+    <section id="page-networth" class="page">
+      <h1>Net Worth</h1>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Current Net Worth</div>
+          <div class="stat-value" id="nw-total">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Assets</div>
+          <div class="stat-value green" id="nw-assets">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Liabilities</div>
+          <div class="stat-value red" id="nw-liabilities">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">30-Day Change</div>
+          <div class="stat-value" id="nw-change">—</div>
+        </div>
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card full">
+          <h3>Net Worth Over Time <span class="hint-inline">(snapshotted automatically on every refresh)</span></h3>
+          <div class="chart-wrap tall"><canvas id="chart-networth"></canvas></div>
+        </div>
+      </div>
+
+      <h2 style="margin-top:1.5rem">Savings Goals</h2>
+      <div class="card" style="margin-bottom:1rem">
+        <form id="form-goal" class="entry-form horizontal">
+          <select name="account_id" id="goal-account-select" required style="flex:2"></select>
+          <input name="target" type="number" step="0.01" min="1" placeholder="Target amount" required />
+          <button type="submit" class="btn-primary">Set Goal</button>
+        </form>
+      </div>
+      <div id="goals-list" class="card-list" style="margin-bottom:1.5rem"></div>
+
+      <div class="two-col">
+        <!-- Manual assets -->
+        <div class="card">
+          <h3>Manual Assets</h3>
+          <form id="form-asset" class="entry-form">
+            <input name="label" placeholder="Label (e.g. Car)" required />
+            <input name="amount" type="number" step="0.01" placeholder="Value" required />
+            <input name="category" placeholder="Category" />
+            <button type="submit" class="btn-primary">Add Asset</button>
+          </form>
+          <div id="manual-assets-list" class="entry-list"></div>
+        </div>
+        <!-- Manual liabilities -->
+        <div class="card">
+          <h3>Manual Liabilities</h3>
+          <form id="form-liability" class="entry-form">
+            <input name="label" placeholder="Label (e.g. Car Loan)" required />
+            <input name="amount" type="number" step="0.01" placeholder="Amount owed" required />
+            <input name="category" placeholder="Category" />
+            <button type="submit" class="btn-primary">Add Liability</button>
+          </form>
+          <div id="manual-liabilities-list" class="entry-list"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

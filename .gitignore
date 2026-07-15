@@ -1,0 +1,26 @@
+# ── NEVER COMMIT: personal financial data & credentials ─────────────────────
+# The SQLite DB contains every transaction, balance, AND the SimpleFIN
+# access URL (a bank credential). Backups too.
+data/
+*.db
+*.db-journal
+*.sqlite*
+
+# Legacy Teller mTLS certificates / private keys
+teller_certs/
+*.pem
+*.key
+
+# Any env-style secrets
+.env
+.env.*
+
+# ── Build & runtime artifacts ────────────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+build/
+dist/
+
+# ── macOS noise ──────────────────────────────────────────────────────────────
+.DS_Store
