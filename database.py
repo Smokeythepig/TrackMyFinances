@@ -13,9 +13,10 @@ def get_db():
 
 def init_db():
     DB_PATH.parent.mkdir(exist_ok=True)
+    os.chmod(DB_PATH.parent, 0o700)
     conn = get_db()
     conn.close()
-    # the DB holds bank credentials (SimpleFIN access URL) — owner-only access
+    # financial data — owner-only access
     os.chmod(DB_PATH, 0o600)
     conn = get_db()
     conn.executescript("""

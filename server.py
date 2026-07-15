@@ -12,6 +12,34 @@ from flask import Flask, jsonify, request, send_from_directory, Response
 
 from database import get_db, init_db, get_meta, set_meta
 import simplefin_client
+import secret_store
+
+SIMPLEFIN_SECRET = "simplefin_access_url"
+
+
+def get_simplefin_url(db):
+    """Access URL from the Keychain, migrating any legacy copy out of the DB."""
+    url = secret_store.get_secret(SIMPLEFIN_SECRET)
+    legacy = get_meta(db, "simplefin_access_url")
+    if not url and legacy:
+        if secret_store.set_secret(SIMPLEFIN_SECRET, legacy):
+            db.execute("DELETE FROM app_meta WHERE key='simplefin_access_url'")
+            db.commit()
+        return legacy
+    if url and legacy:
+        # already in keychain — purge the DB copy
+        db.execute("DELETE FROM app_meta WHERE key='simplefin_access_url'")
+        db.commit()
+    return url or legacy
+
+
+def store_simplefin_url(db, access_url):
+    if secret_store.set_secret(SIMPLEFIN_SECRET, access_url):
+        db.execute("DELETE FROM app_meta WHERE key='simplefin_access_url'")
+    else:
+        # non-macOS / keychain unavailable: DB fallback (file is chmod 600)
+        set_meta(db, "simplefin_access_url", access_url)
+    db.commit()
 
 app = Flask(__name__, static_folder="frontend", static_url_path="")
 FRONTEND = Path(__file__).parent / "frontend"
@@ -68,11 +96,25 @@ def index():
 
 # ── Status ──────────────────────────────────────────────────────────────────
 
+@app.after_request
+def security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    # no external hosts, ever — blocks exfiltration even if markup injection slipped through
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'"
+    )
+    return resp
+
+
 @app.route("/api/status")
 def status():
     db = get_db()
     last_refresh = get_meta(db, "last_refresh")
-    simplefin = bool(get_meta(db, "simplefin_access_url"))
+    simplefin = bool(get_simplefin_url(db))
     db.close()
     return jsonify({"last_refresh": last_refresh, "simplefin": simplefin})
 
@@ -132,7 +174,7 @@ def _infer_account_type(name: str, org: str) -> str:
 
 
 def sync_simplefin(db, errors):
-    access_url = get_meta(db, "simplefin_access_url")
+    access_url = get_simplefin_url(db)
     if not access_url:
         return
     try:
@@ -507,8 +549,7 @@ def simplefin_connect():
         db.close()
         return jsonify({"error": f"Could not claim setup token: {e}"}), 400
 
-    set_meta(db, "simplefin_access_url", access_url)
-    db.commit()
+    store_simplefin_url(db, access_url)
     errors = []
     sync_simplefin(db, errors)
     auto_snapshot(db)
@@ -520,6 +561,7 @@ def simplefin_connect():
 
 @app.route("/api/simplefin", methods=["DELETE"])
 def simplefin_disconnect():
+    secret_store.delete_secret(SIMPLEFIN_SECRET)
     db = get_db()
     db.execute("DELETE FROM app_meta WHERE key='simplefin_access_url'")
     db.execute("DELETE FROM category_overrides WHERE transaction_id IN (SELECT id FROM transactions WHERE account_id LIKE 'sf_%')")

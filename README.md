@@ -55,9 +55,14 @@ To build a double-clickable macOS app: `./build.sh` (output in `dist/`).
   analytics, no error reporting, no phone-home.
 - **Read-only bank access.** SimpleFIN is a read-only protocol — the credential
   the app stores cannot move money or change anything at your bank.
-- **Credential storage.** The SimpleFIN access URL is stored in the local SQLite
-  database (`data/finances.db`), which is created with owner-only (`600`) file
-  permissions. `data/` is gitignored — never commit it.
+- **Credentials live in the macOS Keychain.** The SimpleFIN access URL is stored
+  as a Keychain generic password (encrypted at rest by macOS), not in a file.
+  On non-macOS systems it falls back to the SQLite database, which is created
+  with owner-only (`600`) permissions inside a `700` directory. `data/` is
+  gitignored — never commit it.
+- **Hardened responses.** The local server sends `Content-Security-Policy`
+  (no external hosts allowed at all), `X-Frame-Options: DENY`, `nosniff`, and
+  `no-referrer` headers, and all bank-sourced text is HTML-escaped before render.
 - **No secrets in code.** Nothing in this repository contains keys or tokens;
   each user supplies their own SimpleFIN token through the UI at runtime.
 
