@@ -246,6 +246,7 @@ def do_refresh():
     db = get_db()
     errors = []
     sync_simplefin(db, errors)
+    apply_category_rules(db)
     auto_snapshot(db)
     set_meta(db, "last_refresh", datetime.now().isoformat(timespec="seconds"))
     db.commit()
@@ -362,11 +363,93 @@ def set_category(txn_id):
     db = get_db()
     if category:
         db.execute(
-            "INSERT OR REPLACE INTO category_overrides (transaction_id, category) VALUES (?,?)",
+            "INSERT OR REPLACE INTO category_overrides (transaction_id, category, source) VALUES (?,?,'manual')",
             (txn_id, category),
         )
     else:
         db.execute("DELETE FROM category_overrides WHERE transaction_id=?", (txn_id,))
+    db.commit()
+    db.close()
+    return jsonify({"ok": True})
+
+
+# ── Auto-categorization rules ────────────────────────────────────────────────
+
+def _rule_matches(db, pattern):
+    """Transaction ids whose normalized description contains the normalized pattern."""
+    key = _merchant_key(pattern)
+    if not key:
+        return []
+    return [r["id"] for r in db.execute("SELECT id, description FROM transactions").fetchall()
+            if key in _merchant_key(r["description"] or "")]
+
+
+def apply_category_rules(db):
+    """Materialize rules into overrides for any transaction that has none.
+
+    Manual overrides always win; rule overrides carry source='rule:<id>' so
+    deleting a rule can cleanly undo its work.
+    """
+    for rule in db.execute("SELECT * FROM category_rules ORDER BY id").fetchall():
+        for txn_id in _rule_matches(db, rule["pattern"]):
+            db.execute(
+                "INSERT OR IGNORE INTO category_overrides (transaction_id, category, source) VALUES (?,?,?)",
+                (txn_id, rule["category"], f"rule:{rule['id']}"),
+            )
+
+
+@app.route("/api/rules", methods=["GET"])
+def list_rules():
+    db = get_db()
+    rules = [dict(r) for r in db.execute("SELECT * FROM category_rules ORDER BY category, pattern").fetchall()]
+    for r in rules:
+        r["applied"] = db.execute(
+            "SELECT COUNT(*) c FROM category_overrides WHERE source=?", (f"rule:{r['id']}",)
+        ).fetchone()["c"]
+    db.close()
+    return jsonify(rules)
+
+
+@app.route("/api/rules/preview")
+def preview_rule():
+    pattern = request.args.get("pattern", "")
+    db = get_db()
+    ids = _rule_matches(db, pattern)
+    uncovered = 0
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        covered = db.execute(
+            f"SELECT COUNT(*) c FROM category_overrides WHERE transaction_id IN ({placeholders})", ids
+        ).fetchone()["c"]
+        uncovered = len(ids) - covered
+    db.close()
+    return jsonify({"matches": len(ids), "uncovered": uncovered})
+
+
+@app.route("/api/rules", methods=["POST"])
+def add_rule():
+    d = request.json or {}
+    pattern = (d.get("pattern") or "").strip()
+    category = (d.get("category") or "").strip()
+    if not pattern or not category or not _merchant_key(pattern):
+        return jsonify({"error": "Both a merchant pattern and a category are required."}), 400
+    db = get_db()
+    cur = db.execute("INSERT INTO category_rules (pattern, category) VALUES (?,?)", (pattern, category))
+    rule_id = cur.lastrowid
+    apply_category_rules(db)
+    db.commit()
+    applied = db.execute(
+        "SELECT COUNT(*) c FROM category_overrides WHERE source=?", (f"rule:{rule_id}",)
+    ).fetchone()["c"]
+    db.close()
+    return jsonify({"ok": True, "id": rule_id, "applied": applied})
+
+
+@app.route("/api/rules/<int:rule_id>", methods=["DELETE"])
+def delete_rule(rule_id):
+    db = get_db()
+    db.execute("DELETE FROM category_overrides WHERE source=?", (f"rule:{rule_id}",))
+    db.execute("DELETE FROM category_rules WHERE id=?", (rule_id,))
     db.commit()
     db.close()
     return jsonify({"ok": True})

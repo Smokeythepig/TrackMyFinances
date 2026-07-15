@@ -397,6 +397,7 @@ async function loadTransactions() {
   p.set("limit", "1000");
   txnRows = await api("/api/transactions?" + p.toString());
   renderTransactions();
+  loadRules().catch(() => {});
 }
 
 function renderTransactions() {
@@ -434,6 +435,63 @@ function renderTransactions() {
   });
 }
 
+// mirror of the server's merchant normalization, for rule suggestions
+const merchantKey = d => String(d || "").toUpperCase().replace(/\d+/g, "").replace(/[^A-Z ]/g, " ").replace(/\s+/g, " ").trim();
+
+/* ── Auto-categorization rules ──────────────────────────────────────────── */
+
+async function loadRules() {
+  const rules = await api("/api/rules");
+  $("rules-count").textContent = rules.length;
+  $("rules-list").innerHTML = rules.length ? rules.map(r => `
+    <div class="entry-row">
+      <div>
+        <div class="entry-label">"${esc(r.pattern)}" → <span class="cat-chip" style="cursor:default">${esc(r.category)}</span></div>
+        <div style="font-size:.72rem;color:var(--muted)">${r.applied} transaction${r.applied === 1 ? "" : "s"} categorized</div>
+      </div>
+      <button class="btn-danger" onclick="deleteRule(${r.id})">✕</button>
+    </div>`).join("") : `<p class="empty">No rules yet.</p>`;
+}
+
+$("form-rule").addEventListener("submit", async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try {
+    const res = await api("/api/rules", {
+      method: "POST",
+      body: JSON.stringify({ pattern: fd.get("pattern"), category: fd.get("category") }),
+    });
+    toast(`Rule added — ${res.applied} transaction${res.applied === 1 ? "" : "s"} categorized`, "ok");
+    e.target.reset();
+    await Promise.all([loadRules(), loadTransactions(), loadCategories()]);
+  } catch (err) {
+    let msg = err.message;
+    try { msg = JSON.parse(msg).error || msg; } catch {}
+    toast(msg, "error");
+  }
+});
+
+async function deleteRule(id) {
+  await api(`/api/rules/${id}`, { method: "DELETE" });
+  toast("Rule deleted — its categorizations were undone", "ok");
+  await Promise.all([loadRules(), loadTransactions(), loadCategories()]);
+}
+
+async function maybeOfferRule(txnId, category) {
+  const row = txnRows.find(t => t.id === txnId);
+  if (!row || !category) return;
+  const pattern = merchantKey(row.description);
+  if (!pattern) return;
+  const prev = await api("/api/rules/preview?pattern=" + encodeURIComponent(pattern));
+  if (prev.uncovered < 1) return;
+  const label = pattern.length > 40 ? pattern.slice(0, 40) + "…" : pattern;
+  if (confirm(`Auto-categorize ${prev.uncovered} more transaction${prev.uncovered === 1 ? "" : "s"} matching "${label}" as "${category}"?\n\nThis also applies to future charges.`)) {
+    const res = await api("/api/rules", { method: "POST", body: JSON.stringify({ pattern, category }) });
+    toast(`Rule created — ${res.applied} transactions categorized`, "ok");
+    await loadRules();
+  }
+}
+
 function editCategory(chip) {
   const txnId = chip.dataset.txn;
   const current = chip.dataset.cat;
@@ -453,6 +511,7 @@ function editCategory(chip) {
         body: JSON.stringify({ category: val }),
       });
       toast(val ? `Recategorized as "${val}"` : "Category reset", "ok");
+      if (val && val !== current) await maybeOfferRule(txnId, val);
     } catch (e) {
       toast("Failed: " + e.message, "error");
     }

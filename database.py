@@ -88,6 +88,13 @@ def init_db():
             FOREIGN KEY (transaction_id) REFERENCES transactions(id)
         );
 
+        CREATE TABLE IF NOT EXISTS category_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern TEXT NOT NULL,
+            category TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS recurring_ignored (
             merchant_key TEXT PRIMARY KEY
         );
@@ -127,6 +134,13 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(date);
+    """)
+    # migration: track whether an override came from the user or a rule
+    try:
+        conn.execute("ALTER TABLE category_overrides ADD COLUMN source TEXT DEFAULT 'manual'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_txn_amount ON transactions(amount);
         CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions(account_id);
         CREATE INDEX IF NOT EXISTS idx_bal_account ON balances(account_id, fetched_at);

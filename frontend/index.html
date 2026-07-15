@@ -184,7 +184,23 @@
           </tbody>
         </table>
       </div>
-      <p class="hint">Tip: click a category to recategorize that transaction.</p>
+      <p class="hint">Tip: click a category to recategorize that transaction — you'll be offered a rule to auto-categorize that merchant everywhere.</p>
+
+      <details style="margin-top:1rem" id="rules-details">
+        <summary class="details-summary">Auto-categorization rules (<span id="rules-count">0</span>)</summary>
+        <div class="card" style="margin-top:.8rem">
+          <p class="page-sub" style="margin:0 0 .8rem">
+            Every transaction whose description matches a pattern gets the category
+            automatically — past and future. Manual recategorizations always win over rules.
+          </p>
+          <form id="form-rule" class="entry-form horizontal">
+            <input name="pattern" placeholder="Merchant contains… (e.g. smoothie king)" required style="flex:2" />
+            <input name="category" list="category-list" placeholder="Category" required />
+            <button type="submit" class="btn-primary">Add Rule</button>
+          </form>
+          <div id="rules-list" class="entry-list" style="margin-top:.8rem"></div>
+        </div>
+      </details>
     </section>
 
     <!-- INCOME -->
