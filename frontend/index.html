@@ -24,6 +24,7 @@
       <li class="nav-item" data-page="budgets"><span class="icon">◔</span> Budgets</li>
       <li class="nav-item" data-page="recurring"><span class="icon">⟳</span> Recurring</li>
       <li class="nav-item" data-page="networth"><span class="icon">↗</span> Net Worth</li>
+      <li class="nav-item" data-page="alerts"><span class="icon">◉</span> Alerts</li>
     </ul>
     <div id="sidebar-footer">
       <div id="last-refresh"></div>
@@ -383,6 +384,28 @@
           <div id="manual-liabilities-list" class="entry-list"></div>
         </div>
       </div>
+    </section>
+
+    <!-- ALERTS -->
+    <section id="page-alerts" class="page">
+      <h1>Alerts</h1>
+      <p class="page-sub">macOS notifications fire after every sync (manual or the automatic 6-hour refresh). Each alert only ever fires once.</p>
+
+      <div class="card" style="margin-bottom:1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+          <h3 style="margin:0">Notification Rules</h3>
+          <button id="btn-test-notif" class="btn-secondary btn-small">Send test notification</button>
+        </div>
+        <div id="notif-settings" class="notif-grid"></div>
+        <div class="notif-thresholds">
+          <label>Large charge over $<input id="nt-large" type="number" min="1" step="10" /></label>
+          <label>Low checking balance under $<input id="nt-lowbal" type="number" min="0" step="50" /></label>
+          <button id="btn-save-notif" class="btn-primary btn-small">Save Settings</button>
+        </div>
+      </div>
+
+      <h2>Recent Alerts</h2>
+      <div id="alerts-feed" class="card-list"></div>
     </section>
 
   </main>

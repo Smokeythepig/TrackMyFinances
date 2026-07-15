@@ -385,6 +385,26 @@ tbody td { padding: .65rem .8rem; }
 .details-summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 .details-summary:hover { color: var(--text); }
 
+/* ── Alerts page ────────────────────────────────────────────────────────── */
+.notif-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; margin-bottom: 1rem; }
+.notif-toggle { color: var(--text); font-size: .85rem; }
+.notif-thresholds {
+  display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap;
+  border-top: 1px solid var(--border); padding-top: 1rem;
+}
+.notif-thresholds label { font-size: .82rem; color: var(--muted); }
+.notif-thresholds input {
+  width: 90px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); padding: .3rem .5rem; margin-left: .3rem;
+}
+.alert-row {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: .8rem 1.1rem; display: flex; justify-content: space-between; align-items: center;
+}
+.alert-row.alert-muted { opacity: .55; }
+.alert-body { font-size: .8rem; color: var(--muted); margin-top: .15rem; }
+.alert-meta { display: flex; align-items: center; gap: .6rem; white-space: nowrap; }
+
 /* ── Commission tag ─────────────────────────────────────────────────────── */
 .commission-tag {
   font-size: .75rem; font-weight: 700; color: #a78bfa;

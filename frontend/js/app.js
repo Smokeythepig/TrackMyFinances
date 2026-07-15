@@ -42,6 +42,7 @@ document.querySelectorAll(".nav-item").forEach(el => {
     if (el.dataset.page === "budgets") loadBudgets();
     if (el.dataset.page === "recurring") loadRecurring();
     if (el.dataset.page === "networth") { renderNetWorth(); loadGoals(); }
+    if (el.dataset.page === "alerts") loadAlerts();
   });
 });
 
@@ -825,6 +826,62 @@ async function deleteManual(id) {
   await loadAll();
   renderNetWorth();
 }
+
+/* ── Alerts page ────────────────────────────────────────────────────────── */
+
+const NOTIF_RULES = [
+  ["payday", "Payday reminders (day before + day of)"],
+  ["paycheck", "Paycheck landed (with commission callout)"],
+  ["budget", "Budget warnings (80% and over-limit)"],
+  ["large_txn", "Large charges"],
+  ["price_hike", "Subscription price increases"],
+  ["bill_due", "Bills due today/tomorrow"],
+  ["goal", "Savings goal reached"],
+  ["milestone", "Net worth milestones ($5k steps)"],
+  ["low_balance", "Low checking balance"],
+  ["sync", "Bank sync failures"],
+];
+
+async function loadAlerts() {
+  const [settings, feed] = await Promise.all([
+    api("/api/notifications/settings"),
+    api("/api/notifications"),
+  ]);
+
+  $("notif-settings").innerHTML = NOTIF_RULES.map(([key, label]) => `
+    <label class="toggle notif-toggle">
+      <input type="checkbox" data-rule="${key}" ${settings[key] ? "checked" : ""} /> ${label}
+    </label>`).join("");
+  $("nt-large").value = settings.large_txn_threshold;
+  $("nt-lowbal").value = settings.low_balance_threshold;
+
+  const list = $("alerts-feed");
+  list.innerHTML = feed.length ? feed.map(n => `
+    <div class="alert-row ${n.sent ? "" : "alert-muted"}">
+      <div>
+        <div class="entry-label">${esc(n.title)}</div>
+        <div class="alert-body">${esc(n.body)}</div>
+      </div>
+      <div class="alert-meta">
+        ${n.sent ? "" : `<span class="badge badge-other" title="Logged during initial seeding or while capped — not shown as a popup">silent</span>`}
+        <span class="mini-sub">${new Date(n.created_at + "Z").toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+      </div>
+    </div>`).join("") : `<p class="empty">No alerts yet — they'll show up here as syncs detect things worth telling you about.</p>`;
+}
+
+$("btn-save-notif").addEventListener("click", async () => {
+  const body = { large_txn_threshold: parseFloat($("nt-large").value) || 250,
+                 low_balance_threshold: parseFloat($("nt-lowbal").value) || 500 };
+  document.querySelectorAll("#notif-settings input[data-rule]").forEach(cb => body[cb.dataset.rule] = cb.checked);
+  await api("/api/notifications/settings", { method: "PUT", body: JSON.stringify(body) });
+  toast("Notification settings saved", "ok");
+});
+
+$("btn-test-notif").addEventListener("click", async () => {
+  const res = await api("/api/notifications/test", { method: "POST" });
+  if (res.ok) toast("Test notification sent — check your screen", "ok");
+  else toast("Notification failed: " + (res.error || "unknown"), "error");
+});
 
 /* ── Load all data ──────────────────────────────────────────────────────── */
 

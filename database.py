@@ -118,6 +118,14 @@ def init_db():
             value TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS notif_log (
+            dedupe_key TEXT PRIMARY KEY,
+            title TEXT,
+            body TEXT,
+            sent INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(date);
         CREATE INDEX IF NOT EXISTS idx_txn_amount ON transactions(amount);
         CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions(account_id);

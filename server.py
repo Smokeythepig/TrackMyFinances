@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import io
+import json
 import re
 import statistics
 import time
@@ -13,6 +14,7 @@ from flask import Flask, jsonify, request, send_from_directory, Response
 from database import get_db, init_db, get_meta, set_meta
 import simplefin_client
 import secret_store
+import notifications
 
 SIMPLEFIN_SECRET = "simplefin_access_url"
 
@@ -235,6 +237,8 @@ def do_refresh():
     auto_snapshot(db)
     set_meta(db, "last_refresh", datetime.now().isoformat(timespec="seconds"))
     db.commit()
+    run_notification_checks(db, errors)
+    db.commit()
     db.close()
     return errors
 
@@ -388,6 +392,221 @@ def export_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=transactions.csv"},
     )
+
+
+# ── Notifications engine ─────────────────────────────────────────────────────
+
+MAX_ALERTS_PER_RUN = 6
+
+NOTIF_DEFAULTS = {
+    "sync": True,          # bank sync failures
+    "payday": True,        # payday today/tomorrow
+    "paycheck": True,      # paycheck landed (+commission callout)
+    "budget": True,        # budget 80% / 100%
+    "large_txn": True,     # single large charge
+    "large_txn_threshold": 250,
+    "price_hike": True,    # subscription price increases
+    "bill_due": True,      # recurring bill expected today/tomorrow
+    "goal": True,          # savings goal reached
+    "milestone": True,     # net worth $5k milestones
+    "low_balance": True,   # checking below threshold
+    "low_balance_threshold": 500,
+}
+
+
+def get_notif_settings(db):
+    stored = get_meta(db, "notif_settings")
+    s = dict(NOTIF_DEFAULTS)
+    if stored:
+        try:
+            s.update({k: v for k, v in json.loads(stored).items() if k in NOTIF_DEFAULTS})
+        except Exception:
+            pass
+    return s
+
+
+def _fmt_usd(n):
+    return f"${n:,.2f}"
+
+
+def gather_alerts(db, sync_errors):
+    """Evaluate every rule and return (dedupe_key, title, body) candidates."""
+    s = get_notif_settings(db)
+    alerts = []
+    today = date.today()
+    recent_cutoff = (today - timedelta(days=4)).isoformat()
+    month = today.strftime("%Y-%m")
+
+    # 1. Sync failures — stale data is the silent killer of finance trackers
+    if s["sync"] and sync_errors:
+        alerts.append((f"syncerr-{today.isoformat()}", "Bank sync problem",
+                       f"Refresh hit an error: {str(sync_errors[0])[:120]}"))
+
+    # Paycheck context
+    paychecks = [dict(r) for r in db.execute(f"""
+        SELECT t.date, t.amount FROM transactions t
+        WHERE t.amount > 0 AND {PAYROLL_SQL} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        ORDER BY t.date DESC LIMIT 30
+    """).fetchall()]
+    base = float(get_meta(db, "comp_base", 0) or 0)
+    per_check_net = estimate_net(base) / PAY_PERIODS if base else None
+    avg_check = statistics.mean([p["amount"] for p in paychecks[:8]]) if paychecks else None
+
+    # 2. Payday tomorrow/today
+    if s["payday"]:
+        for payday in _next_paydays([p["date"] for p in paychecks]):
+            delta = (date.fromisoformat(payday) - today).days
+            if 0 <= delta <= 1:
+                when = "today" if delta == 0 else "tomorrow"
+                body = f"Expected {when}" + (f" — around {_fmt_usd(avg_check)}" if avg_check else "")
+                alerts.append((f"payday-{payday}", f"Payday {when} 💵", body))
+
+    # 3. Paycheck landed (with commission callout)
+    if s["paycheck"]:
+        for p in db.execute(f"""
+            SELECT t.id, t.date, t.amount FROM transactions t
+            WHERE t.amount > 0 AND {PAYROLL_SQL} AND t.date >= ? AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        """, (recent_cutoff,)).fetchall():
+            body = f"{_fmt_usd(p['amount'])} deposited"
+            if per_check_net and p["amount"] > per_check_net * 1.08:
+                body += f" — includes ~{_fmt_usd(p['amount'] - per_check_net)} commission 🎉"
+            alerts.append((f"paycheck-{p['id']}", "Paycheck landed", body))
+
+    # 4. Budget thresholds (80% warn, 100% over)
+    for b in compute_budgets(db, month) if s["budget"] else []:
+        if b["monthly_limit"] <= 0:
+            continue
+        pct = b["spent"] / b["monthly_limit"] * 100
+        if pct >= 100:
+            alerts.append((f"budget-over-{b['category']}-{month}", f"Over budget: {b['category']}",
+                           f"{_fmt_usd(b['spent'])} spent of {_fmt_usd(b['monthly_limit'])} — over by {_fmt_usd(b['spent'] - b['monthly_limit'])}"))
+        elif pct >= 80:
+            days_left = (date(today.year + (today.month == 12), today.month % 12 + 1, 1) - today).days
+            alerts.append((f"budget-warn-{b['category']}-{month}", f"Budget warning: {b['category']}",
+                           f"{pct:.0f}% used with {days_left} days left in the month"))
+
+    # 5. Large new charge
+    if s["large_txn"]:
+        threshold = float(s["large_txn_threshold"])
+        for t in db.execute(f"""
+            SELECT t.id, t.description, t.amount FROM transactions t
+            WHERE t.amount <= ? AND t.date >= ? AND NOT {IS_TRANSFER()} AND {NOT_HIDDEN} AND {NOT_INVESTMENT}
+        """, (-threshold, recent_cutoff)).fetchall():
+            alerts.append((f"txn-{t['id']}", "Large charge",
+                           f"{_fmt_usd(abs(t['amount']))} at {t['description'][:60]}"))
+
+    recurring_items, _ = compute_recurring(db)
+    for r in recurring_items:
+        # 6. Subscription price hikes (fixed-amount subs only)
+        if (s["price_hike"] and not r["manual"] and not r["variable"] and r["active"] and not r["ignored"]
+                and r["prev_median"] and r["last_amount"] >= r["prev_median"] * 1.12
+                and r["last_amount"] - r["prev_median"] >= 1
+                and r["last_date"] >= recent_cutoff):
+            alerts.append((f"hike-{r['merchant_key']}-{r['last_amount']}", "Subscription price increase",
+                           f"{r['description'][:50]}: {_fmt_usd(r['prev_median'])} → {_fmt_usd(r['last_amount'])}"))
+        # 7. Bill expected tomorrow (monthly+ cadence, non-trivial amount)
+        if (s["bill_due"] and r["active"] and not r["ignored"] and r["next_expected"]
+                and r["cadence"] in ("monthly", "quarterly", "yearly") and r["avg_amount"] >= 15):
+            delta = (date.fromisoformat(r["next_expected"]) - today).days
+            if 0 <= delta <= 1:
+                alerts.append((f"bill-{r['merchant_key']}-{r['next_expected']}", "Bill due soon",
+                               f"{r['description'][:50]} (~{_fmt_usd(r['avg_amount'])}) expected {'today' if delta == 0 else 'tomorrow'}"))
+
+    # 8. Savings goal reached
+    for g in db.execute("""
+        SELECT g.account_id, g.target, a.name,
+               (SELECT ledger FROM balances b WHERE b.account_id=g.account_id ORDER BY fetched_at DESC LIMIT 1) AS bal
+        FROM goals g JOIN accounts a ON a.id=g.account_id
+    """).fetchall() if s["goal"] else []:
+        if g["bal"] is not None and g["bal"] >= g["target"]:
+            alerts.append((f"goal-{g['account_id']}-{int(g['target'])}", "Goal reached 🎉",
+                           f"{g['name']} hit {_fmt_usd(g['target'])} (now {_fmt_usd(g['bal'])})"))
+
+    # 9. Net worth milestones ($5k steps)
+    if s["milestone"]:
+        assets, liabilities = compute_networth(db)
+        milestone = int((assets - liabilities) // 5000) * 5000
+        if milestone > 0:
+            alerts.append((f"networth-{milestone}", "Net worth milestone 🚀",
+                           f"You crossed {_fmt_usd(milestone)} — currently {_fmt_usd(assets - liabilities)}"))
+
+    # 10. Checking balance running low (once per account per week)
+    if s["low_balance"]:
+        lb_threshold = float(s["low_balance_threshold"])
+        week = f"{today.isocalendar().year}w{today.isocalendar().week}"
+        for a in db.execute("""
+            SELECT a.id, a.name,
+                   (SELECT ledger FROM balances b WHERE b.account_id=a.id ORDER BY fetched_at DESC LIMIT 1) AS bal
+            FROM accounts a
+            WHERE a.type = 'depository' AND (LOWER(a.name) LIKE '%checking%' OR LOWER(a.subtype) LIKE '%checking%')
+              AND a.id NOT IN (SELECT account_id FROM hidden_accounts)
+        """).fetchall():
+            if a["bal"] is not None and 0 <= a["bal"] < lb_threshold:
+                alerts.append((f"lowbal-{a['id']}-{week}", "Low balance ⚠️",
+                               f"{a['name']} is at {_fmt_usd(a['bal'])} (below your {_fmt_usd(lb_threshold)} threshold)"))
+
+    return alerts
+
+
+def run_notification_checks(db, sync_errors):
+    try:
+        candidates = gather_alerts(db, sync_errors)
+        if not get_meta(db, "notif_seeded"):
+            # first run: log everything silently so history doesn't spam
+            for key, title, body in candidates:
+                notifications.record(db, key, title, body, sent=False)
+            set_meta(db, "notif_seeded", "1")
+            return
+        sent = 0
+        for key, title, body in candidates:
+            if notifications.already_sent(db, key):
+                continue
+            delivered = sent < MAX_ALERTS_PER_RUN and notifications.notify(title, body)
+            notifications.record(db, key, title, body, sent=delivered)
+            if delivered:
+                sent += 1
+    except Exception:
+        pass  # alerting must never break a sync
+
+
+@app.route("/api/notifications")
+def list_notifications():
+    db = get_db()
+    rows = db.execute(
+        "SELECT title, body, sent, created_at FROM notif_log WHERE title != '' ORDER BY created_at DESC LIMIT 30"
+    ).fetchall()
+    db.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/notifications/settings", methods=["GET"])
+def notif_settings_get():
+    db = get_db()
+    s = get_notif_settings(db)
+    db.close()
+    return jsonify(s)
+
+
+@app.route("/api/notifications/settings", methods=["PUT"])
+def notif_settings_put():
+    incoming = request.json or {}
+    clean = {}
+    for k, default in NOTIF_DEFAULTS.items():
+        if k not in incoming:
+            continue
+        clean[k] = float(incoming[k]) if k.endswith("_threshold") else bool(incoming[k])
+    db = get_db()
+    merged = {**get_notif_settings(db), **clean}
+    set_meta(db, "notif_settings", json.dumps(merged))
+    db.commit()
+    db.close()
+    return jsonify(merged)
+
+
+@app.route("/api/notifications/test", methods=["POST"])
+def test_notification():
+    ok = notifications.notify("Test notification", "Notifications are working — you'll get alerts for paydays, budgets, big charges, price hikes, and milestones.")
+    return jsonify({"ok": ok, "error": notifications.last_error or None})
 
 
 # ── CSV import (any bank without a SimpleFIN connection) ────────────────────
@@ -842,16 +1061,13 @@ CADENCES = [
 PER_YEAR = {"weekly": 52, "biweekly": 26, "monthly": 12, "quarterly": 4, "yearly": 1}
 
 
-@app.route("/api/recurring")
-def recurring():
-    db = get_db()
+def compute_recurring(db):
     ignored = {r["merchant_key"] for r in db.execute("SELECT merchant_key FROM recurring_ignored").fetchall()}
     dismissed = {r["merchant_key"] for r in db.execute("SELECT merchant_key FROM recurring_dismissed").fetchall()}
     manual = [dict(r) for r in db.execute("SELECT * FROM manual_subscriptions ORDER BY name").fetchall()]
     rows = db.execute(
         f"SELECT description, amount, date FROM transactions t WHERE amount < 0 AND date != '' AND {NOT_HIDDEN} AND {NOT_INVESTMENT} ORDER BY date"
     ).fetchall()
-    db.close()
 
     groups = defaultdict(list)
     for r in rows:
@@ -902,6 +1118,8 @@ def recurring():
             "active": active,
             "ignored": key in ignored,
             "manual": False,
+            "last_amount": round(amounts[-1], 2),
+            "prev_median": round(statistics.median(amounts[:-1]), 2) if len(amounts) > 1 else None,
         })
 
     for m in manual:
@@ -919,10 +1137,20 @@ def recurring():
             "active": True,
             "ignored": False,
             "manual": True,
+            "last_amount": None,
+            "prev_median": None,
         })
 
     results.sort(key=lambda x: (-x["active"], -x["monthly_cost"]))
-    return jsonify({"items": results, "dismissed_count": len(dismissed)})
+    return results, len(dismissed)
+
+
+@app.route("/api/recurring")
+def recurring():
+    db = get_db()
+    items, dismissed_count = compute_recurring(db)
+    db.close()
+    return jsonify({"items": items, "dismissed_count": dismissed_count})
 
 
 @app.route("/api/recurring/ignore", methods=["POST"])
@@ -979,11 +1207,7 @@ def delete_subscription(sub_id):
 
 # ── Budgets ──────────────────────────────────────────────────────────────────
 
-@app.route("/api/budgets", methods=["GET"])
-def list_budgets():
-    """Budgets with current-month spend per category."""
-    month = date.today().strftime("%Y-%m")
-    db = get_db()
+def compute_budgets(db, month):
     rows = db.execute(f"""
         SELECT b.category, b.monthly_limit,
                COALESCE((
@@ -994,8 +1218,16 @@ def list_budgets():
                ), 0) AS spent
         FROM budgets b ORDER BY b.category
     """, (month,)).fetchall()
+    return [{**dict(r), "spent": round(r["spent"], 2)} for r in rows]
+
+
+@app.route("/api/budgets", methods=["GET"])
+def list_budgets():
+    """Budgets with current-month spend per category."""
+    db = get_db()
+    budgets = compute_budgets(db, date.today().strftime("%Y-%m"))
     db.close()
-    return jsonify([{**dict(r), "spent": round(r["spent"], 2)} for r in rows])
+    return jsonify(budgets)
 
 
 @app.route("/api/budgets", methods=["POST"])
