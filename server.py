@@ -11,7 +11,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory, Response
 
-from database import get_db, init_db, get_meta, set_meta
+from database import get_db, init_db, get_meta, set_meta, backup_db
 import simplefin_client
 import secret_store
 import notifications
@@ -259,6 +259,10 @@ def do_refresh():
     run_notification_checks(db, errors)
     db.commit()
     db.close()
+    try:
+        backup_db()
+    except Exception as e:
+        errors.append(f"backup: {e}")
     return errors
 
 

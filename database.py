@@ -153,6 +153,35 @@ def init_db():
     conn.close()
 
 
+BACKUP_DIR = DB_PATH.parent / "backups"
+BACKUP_KEEP = 14
+
+
+def backup_db():
+    """Consistent daily snapshot of the whole DB (data + every user customization).
+
+    Uses SQLite's online backup API so it's safe while the app is running.
+    Keeps the last BACKUP_KEEP dailies. Called from the sync path, so it runs
+    at least once a day without any scheduler.
+    """
+    from datetime import date
+    BACKUP_DIR.mkdir(exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)
+    target = BACKUP_DIR / f"finances-{date.today().isoformat()}.db"
+    if target.exists():
+        return
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(target)
+    with dst:
+        src.backup(dst)
+    dst.close()
+    src.close()
+    os.chmod(target, 0o600)
+    backups = sorted(BACKUP_DIR.glob("finances-*.db"))
+    for old in backups[:-BACKUP_KEEP]:
+        old.unlink()
+
+
 def get_meta(db, key, default=None):
     row = db.execute("SELECT value FROM app_meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else default
