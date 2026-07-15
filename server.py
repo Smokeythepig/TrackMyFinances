@@ -98,6 +98,18 @@ def index():
 
 # ── Status ──────────────────────────────────────────────────────────────────
 
+ALLOWED_HOSTS = {"127.0.0.1:7432", "localhost:7432", "127.0.0.1", "localhost"}
+
+
+@app.before_request
+def reject_rebinding():
+    # DNS rebinding defense: a malicious site can point its own domain at
+    # 127.0.0.1 and read this API same-origin. Legit local clients always
+    # send a localhost Host header.
+    if request.host not in ALLOWED_HOSTS:
+        return jsonify({"error": "forbidden host"}), 403
+
+
 @app.after_request
 def security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
@@ -383,10 +395,16 @@ def export_csv():
 
     buf = io.StringIO()
     w = csv.writer(buf)
+    def safe(v):
+        # formula-injection guard: bank-supplied text starting with =+-@ would
+        # execute as a formula when the CSV opens in Excel/Numbers
+        s = str(v) if v is not None else ""
+        return "'" + s if s and s[0] in "=+-@" else s
+
     w.writerow(["date", "description", "account", "institution", "category", "amount", "type", "status"])
     for r in rows:
-        w.writerow([r["date"], r["description"], r["account_name"], r["institution_name"],
-                    r["category"], r["amount"], r["type"], r["status"]])
+        w.writerow([r["date"], safe(r["description"]), safe(r["account_name"]), safe(r["institution_name"]),
+                    safe(r["category"]), r["amount"], r["type"], r["status"]])
     return Response(
         buf.getvalue(),
         mimetype="text/csv",

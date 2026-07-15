@@ -640,7 +640,7 @@ function renderBudgets() {
           <div class="budget-nums">
             <span class="${over ? "red" : ""}">${fmt(b.spent)}</span>
             <span class="mini-sub">of ${fmt(b.monthly_limit)}</span>
-            <button class="btn-danger" onclick="deleteBudget('${esc(b.category)}')">✕</button>
+            <button class="btn-danger" onclick="deleteBudget('${encodeURIComponent(b.category)}')">✕</button>
           </div>
         </div>
         <div class="progress-track">
@@ -665,8 +665,8 @@ $("form-budget").addEventListener("submit", async e => {
   await loadBudgets();
 });
 
-async function deleteBudget(category) {
-  await api(`/api/budgets/${encodeURIComponent(category)}`, { method: "DELETE" });
+async function deleteBudget(encodedCategory) {
+  await api(`/api/budgets/${encodedCategory}`, { method: "DELETE" });
   toast("Budget removed", "ok");
   await loadBudgets();
 }
@@ -719,20 +719,20 @@ function renderRecurring() {
         </div>
         ${r.manual
           ? `<button class="btn-danger" title="Delete this subscription" onclick="deleteSubscription(${r.manual_id})">✕</button>`
-          : `<button class="btn-secondary btn-small" title="Keep in list but exclude from totals" onclick="toggleIgnore('${esc(r.merchant_key)}', ${!r.ignored})">${r.ignored ? "Unignore" : "Ignore"}</button>
-             <button class="btn-danger" title="Not actually recurring — remove from this list" onclick="dismissRecurring('${esc(r.merchant_key)}')">✕</button>`}
+          : `<button class="btn-secondary btn-small" title="Keep in list but exclude from totals" onclick="toggleIgnore('${encodeURIComponent(r.merchant_key)}', ${!r.ignored})">${r.ignored ? "Unignore" : "Ignore"}</button>
+             <button class="btn-danger" title="Not actually recurring — remove from this list" onclick="dismissRecurring('${encodeURIComponent(r.merchant_key)}')">✕</button>`}
       </div>
     </div>`).join("");
 }
 
-async function toggleIgnore(key, ignored) {
-  await api("/api/recurring/ignore", { method: "POST", body: JSON.stringify({ merchant_key: key, ignored }) });
+async function toggleIgnore(encodedKey, ignored) {
+  await api("/api/recurring/ignore", { method: "POST", body: JSON.stringify({ merchant_key: decodeURIComponent(encodedKey), ignored }) });
   await loadRecurring();
   renderDashboard();
 }
 
-async function dismissRecurring(key) {
-  await api("/api/recurring/dismiss", { method: "POST", body: JSON.stringify({ merchant_key: key }) });
+async function dismissRecurring(encodedKey) {
+  await api("/api/recurring/dismiss", { method: "POST", body: JSON.stringify({ merchant_key: decodeURIComponent(encodedKey) }) });
   toast("Removed — it won't be detected again", "ok");
   await loadRecurring();
   renderDashboard();
