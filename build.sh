@@ -13,8 +13,6 @@ pyinstaller \
   --windowed \
   --onedir \
   --add-data "frontend:frontend" \
-
-  
   --hidden-import "webview" \
   --hidden-import "flask" \
   --hidden-import "requests" \

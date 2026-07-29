@@ -57,9 +57,16 @@ To build a double-clickable macOS app: `./build.sh` (output in `dist/`).
   the app stores cannot move money or change anything at your bank.
 - **Credentials live in the macOS Keychain.** The SimpleFIN access URL is stored
   as a Keychain generic password (encrypted at rest by macOS), not in a file.
-  On non-macOS systems it falls back to the SQLite database, which is created
-  with owner-only (`600`) permissions inside a `700` directory. `data/` is
-  gitignored — never commit it.
+  On non-macOS systems it falls back to the SQLite database.
+- **The database lives outside the app/repo entirely** — at
+  `~/Library/Application Support/TrackMyFinances/` (macOS) or `~/.trackmyfinances/`
+  elsewhere, owner-only (`600`) permissions inside a `700` directory. It is
+  deliberately kept out of both the git repo and the PyInstaller bundle, so
+  running from source and running a packaged `.app` always share the same
+  real data, and rebuilding the app never resets it. (Older installs: any
+  pre-existing repo-local `data/finances.db` is moved here automatically,
+  once, the first time you launch after upgrading.) `data/` remains gitignored
+  as a legacy/belt-and-suspenders guard — never commit it.
 - **Hardened responses.** The local server sends `Content-Security-Policy`
   (no external hosts allowed at all), `X-Frame-Options: DENY`, `nosniff`, and
   `no-referrer` headers, and all bank-sourced text is HTML-escaped before render.

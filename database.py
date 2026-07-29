@@ -1,8 +1,38 @@
 import sqlite3
 import os
+import platform
+import shutil
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "data" / "finances.db"
+
+def _data_dir() -> Path:
+    """Where the database lives — deliberately OUTSIDE the app/repo folder.
+
+    A packaged .app's working files sit inside the bundle itself, so if the
+    DB lived next to this source file, every rebuild (or a stale double-clicked
+    .app) would silently diverge from `./run.sh` run against the same source
+    tree — exactly what happened when an old build kept its own frozen copy.
+    A stable per-user location means source runs and a packaged app always
+    read/write the same real data, and rebuilding never resets anything.
+    """
+    if platform.system() == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "TrackMyFinances"
+    return Path.home() / ".trackmyfinances"
+
+
+DATA_DIR = _data_dir()
+DB_PATH = DATA_DIR / "finances.db"
+
+# Pre-migration location (this repo's own data/ folder). One-time moved into
+# DATA_DIR below so existing installs don't lose anything.
+_LEGACY_DB_PATH = Path(__file__).parent / "data" / "finances.db"
+
+
+def _migrate_legacy_db():
+    if DB_PATH.exists() or not _LEGACY_DB_PATH.exists():
+        return
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(_LEGACY_DB_PATH), str(DB_PATH))
 
 
 def get_db():
@@ -12,7 +42,8 @@ def get_db():
 
 
 def init_db():
-    DB_PATH.parent.mkdir(exist_ok=True)
+    _migrate_legacy_db()
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(DB_PATH.parent, 0o700)
     conn = get_db()
     conn.close()
